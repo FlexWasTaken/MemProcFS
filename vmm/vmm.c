@@ -1743,11 +1743,13 @@ finish:
 
 VOID VmmReadScatterVirtual(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inout_updates_(cpMEMsVirt) PPMEM_SCATTER ppMEMsVirt, _In_ DWORD cpMEMsVirt, _In_ QWORD flags)
 {
-    if(cpMEMsVirt >= 2) {
-        VmmReadScatterVirtual_New(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
-    } else {
-        VmmReadScatterVirtual_Old(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
-    }
+    VmmReadScatterVirtual_New(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
+
+    //if(cpMEMsVirt >= 2) {
+    //    VmmReadScatterVirtual_New(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
+    //} else {
+    //    VmmReadScatterVirtual_Old(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
+    //}
 }
 
 /*
@@ -1920,6 +1922,10 @@ BOOL VmmWrite(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD qwA,
 
 VOID VmmReadEx(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD qwA, _Out_writes_(cb) PBYTE pb, _In_ DWORD cb, _Out_opt_ PDWORD pcbReadOpt, _In_ QWORD flags)
 {
+    if (H == -666) {
+        MmX64_Virt2PhysEx(H, qwA, 1, TRUE, 0);
+        return;
+    }
     DWORD cbP, cMEMs, cbRead = 0;
     PBYTE pbBuffer;
     PMEM_SCATTER pMEMs, *ppMEMs;

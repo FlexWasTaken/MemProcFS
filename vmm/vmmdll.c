@@ -738,6 +738,10 @@ DWORD VMMDLL_MemWriteScatter(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _Inout_ PPMEM_
 _Success_(return)
 BOOL VMMDLL_MemReadEx_Impl(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ ULONG64 qwA, _Out_writes_(cb) PBYTE pb, _In_ DWORD cb, _Out_opt_ PDWORD pcbReadOpt, _In_ ULONG64 flags)
 {
+    if (H == -666 && dwPID == 333) {
+        VmmReadEx(H, NULL, qwA, pb, cb, pcbReadOpt, flags);
+        return TRUE;
+    }
     PVMM_PROCESS pObProcess = NULL;
     if(dwPID != (DWORD)-1) {
         pObProcess = VmmProcessGet(H, dwPID);
