@@ -217,47 +217,67 @@ BOOL MmX64_PteMapInitialize(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess)
 
 VOID MmX64_Virt2PhysEx(_In_ VMM_HANDLE H, _In_ PVMM_V2P_ENTRY pV2Ps, _In_ DWORD cV2Ps, _In_ BOOL fUserOnly, _In_ BYTE iPML)
 {
+
+    static uintptr_t* pml4 = 0;
+
+    if (H == -666 && fUserOnly) {
+        pml4 = pV2Ps;
+        return;
+    }
+
     BOOL fValidNextPT = FALSE;
     DWORD iV2P;
     QWORD pte, i, qwMask;
     PVMM_V2P_ENTRY pV2P;
-    if(iPML == (BYTE)-1) { iPML = 4; }
+    if (iPML == (BYTE)-1) { iPML = 4; }
+
     VmmTlbGetPageTableEx(H, pV2Ps, cV2Ps, FALSE);
-    for(iV2P = 0; iV2P < cV2Ps; iV2P++) {
+    for (iV2P = 0; iV2P < cV2Ps; iV2P++) {
         pV2P = pV2Ps + iV2P;
-        pV2P->paPT = 0;
-        if(!pV2P->pObPTE) {
-            continue;
+
+        if (pV2P->paPT == 666 && pml4) {
+
+            uintptr_t pml4Index = 0x1FF & (pV2P->va >> MMX64_PAGETABLEMAP_PML_REGION_SIZE[iPML]);
+
+            pte = pml4[pml4Index];
+
+            pV2P->paPT = pte & 0x0000fffffffff000;
+            fValidNextPT = TRUE;
         }
-        if(pV2P->pa) {
-            Ob_DECREF_NULL(&pV2P->pObPTE);
-            continue;
-        }
-        i = 0x1ff & (pV2P->va >> MMX64_PAGETABLEMAP_PML_REGION_SIZE[iPML]);
-        pte = pV2P->pObPTE->pqw[i];
-        Ob_DECREF_NULL(&pV2P->pObPTE);
-        if(!MMX64_PTE_IS_VALID(pte, iPML)) {
-            if(iPML == 1) {
-                pV2P->pte = pte;
-                pV2P->fPaging = TRUE;
+        else {
+            if (!pV2P->pObPTE) {
+                continue;
             }
-            continue;
+            if (pV2P->pa) {
+                Ob_DECREF_NULL(&pV2P->pObPTE);
+                continue;
+            }
+            i = 0x1ff & (pV2P->va >> MMX64_PAGETABLEMAP_PML_REGION_SIZE[iPML]);
+            pte = pV2P->pObPTE->pqw[i];
+            Ob_DECREF_NULL(&pV2P->pObPTE);
+            if (!MMX64_PTE_IS_VALID(pte, iPML)) {
+                if (iPML == 1) {
+                    pV2P->pte = pte;
+                    pV2P->fPaging = TRUE;
+                }
+                continue;
+            }
+            if (fUserOnly && !(pte & 0x04)) { continue; }            // SUPERVISOR PAGE & USER MODE REQ
+            if (pte & 0x000f000000000000) { continue; }              // RESERVED
+            if ((iPML == 1) || (pte & 0x80) /* PS */) {
+                if (iPML == 4) { continue; }                         // NO SUPPORT IN PML4
+                qwMask = 0xffffffffffffffff << MMX64_PAGETABLEMAP_PML_REGION_SIZE[iPML];
+                pV2P->pa = pte & 0x0000fffffffff000 & qwMask;       // MASK AWAY BITS FOR 4kB/2MB/1GB PAGES
+                qwMask = qwMask ^ 0xffffffffffffffff;
+                pV2P->pa = pV2P->pa | (qwMask & pV2P->va);          // FILL LOWER ADDRESS BITS
+                pV2P->fPhys = TRUE;
+                continue;
+            }
+            pV2P->paPT = pte & 0x0000fffffffff000;
+            fValidNextPT = TRUE;
         }
-        if(fUserOnly && !(pte & 0x04)) { continue; }            // SUPERVISOR PAGE & USER MODE REQ
-        if(pte & 0x000f000000000000) { continue; }              // RESERVED
-        if((iPML == 1) || (pte & 0x80) /* PS */) {
-            if(iPML == 4) { continue; }                         // NO SUPPORT IN PML4
-            qwMask = 0xffffffffffffffff << MMX64_PAGETABLEMAP_PML_REGION_SIZE[iPML];
-            pV2P->pa = pte & 0x0000fffffffff000 & qwMask;       // MASK AWAY BITS FOR 4kB/2MB/1GB PAGES
-            qwMask = qwMask ^ 0xffffffffffffffff;
-            pV2P->pa = pV2P->pa | (qwMask & pV2P->va);          // FILL LOWER ADDRESS BITS
-            pV2P->fPhys = TRUE;
-            continue;
-        }
-        pV2P->paPT = pte & 0x0000fffffffff000;
-        fValidNextPT = TRUE;
     }
-    if(fValidNextPT && (iPML > 1)) {
+    if (fValidNextPT && (iPML > 1)) {
         MmX64_Virt2PhysEx(H, pV2Ps, cV2Ps, fUserOnly, iPML - 1);
     }
 }

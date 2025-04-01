@@ -1398,39 +1398,62 @@ VOID VmmWriteScatterPhysical(_In_ VMM_HANDLE H, _Inout_ PPMEM_SCATTER ppMEMsPhys
 
 VOID VmmWriteScatterVirtual(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inout_ PPMEM_SCATTER ppMEMsVirt, _In_ DWORD cpMEMsVirt)
 {
-    DWORD i;
-    QWORD qwPA_PTE = 0, qwPagedPA = 0;
-    PMEM_SCATTER pMEM;
+    DWORD iVA, iV2P, cV2P = 0, cPhys = 0;
+    PVMM_V2P_ENTRY pV2P, pV2Ps;
+    PMEM_SCATTER* ppMEMs, pMEMs_Phys, pMEM_Phys, pMEM_Virt;
+    BYTE* pbBuffer = NULL;
     BOOL fProcessMagicHandle = ((SIZE_T)pProcess >= PROCESS_MAGIC_HANDLE_THRESHOLD);
-    // 1: 'magic' process handle
-    if(fProcessMagicHandle && !(pProcess = VmmProcessGet(H, (DWORD)(0-(SIZE_T)pProcess)))) { return; }
-    // 2: pre-callback
-    if(H->vmm.MemUserCB.pfnWriteVirtualPreCB) {
-        H->vmm.MemUserCB.pfnWriteVirtualPreCB(H->vmm.MemUserCB.ctxWriteVirtualPre, pProcess->dwPID, cpMEMsVirt, ppMEMsVirt);
+
+    if (fProcessMagicHandle && !(pProcess = VmmProcessGet(H, (DWORD)(0 - (SIZE_T)pProcess)))) { return; }
+
+    pbBuffer = LocalAlloc(LMEM_ZEROINIT, cpMEMsVirt * (sizeof(MEM_SCATTER) + sizeof(PMEM_SCATTER)));
+    if (!pbBuffer) { goto finish; }
+
+    ppMEMs = (PPMEM_SCATTER)pbBuffer;
+    pV2Ps = (PVMM_V2P_ENTRY)(pbBuffer + cpMEMsVirt * sizeof(PMEM_SCATTER));
+    pMEMs_Phys = (PMEM_SCATTER)pV2Ps;
+
+    for (iVA = 0; iVA < cpMEMsVirt; iVA++) {
+        pMEM_Virt = ppMEMsVirt[iVA];
+        if (pMEM_Virt->f || (pMEM_Virt->qwA == (QWORD)-1)) { continue; }
+
+        pV2Ps[cV2P].paPT = pProcess->paDTB;
+        pV2Ps[cV2P].va = pMEM_Virt->qwA;
+        ppMEMs[cV2P] = pMEM_Virt;
+        cV2P++;
     }
-    // 3: virt2phys translation
-    for(i = 0; i < cpMEMsVirt; i++) {
-        pMEM = ppMEMsVirt[i];
-        MEM_SCATTER_STACK_PUSH(pMEM, pMEM->qwA);
-        if(pMEM->f || (pMEM->qwA == (QWORD)-1)) {
-            pMEM->qwA = (QWORD)-1;
-            continue;
+    if (!cV2P) { goto finish; }
+
+    H->vmm.fnMemoryModel.pfnVirt2PhysEx(H, pV2Ps, cV2P, pProcess->fUserOnly, -1);
+
+    for (iV2P = 0; iV2P < cV2P; iV2P++) {
+        pV2P = pV2Ps + iV2P;
+        pMEM_Virt = ppMEMs[iV2P];
+
+        if (!pV2P->fPhys) { continue; }
+
+        pMEM_Phys = pMEMs_Phys + cPhys;
+        ppMEMs[cPhys] = pMEM_Phys;
+        cPhys++;
+        pMEM_Phys->version = MEM_SCATTER_VERSION;
+        pMEM_Phys->qwA = pV2P->pa;
+        pMEM_Phys->cb = pMEM_Virt->cb;
+        pMEM_Phys->pb = pMEM_Virt->pb;
+        pMEM_Phys->f = FALSE;
+        MEM_SCATTER_STACK_PUSH(pMEM_Phys, (QWORD)pMEM_Virt);
+    }
+
+    if (cPhys) {
+        VmmWriteScatterPhysical(H, ppMEMs, cPhys);
+        while (cPhys > 0) {
+            cPhys--;
+            ((PMEM_SCATTER)MEM_SCATTER_STACK_POP(ppMEMs[cPhys]))->f = ppMEMs[cPhys]->f;
         }
-        if(VmmVirt2Phys(H, pProcess, pMEM->qwA, &qwPA_PTE)) {
-            pMEM->qwA = qwPA_PTE;
-            continue;
-        }
-        // paged "read" also translate virtual -> physical for some
-        // types of paged memory such as transition and prototype.
-        H->vmm.fnMemoryModel.pfnPagedRead(H, pProcess, pMEM->qwA, qwPA_PTE, NULL, &qwPagedPA, NULL, 0);
-        pMEM->qwA = qwPagedPA ? qwPagedPA : (QWORD)-1;
     }
-    // 4: write to physical addresses
-    VmmWriteScatterPhysical(H, ppMEMsVirt, cpMEMsVirt);
-    for(i = 0; i < cpMEMsVirt; i++) {
-        ppMEMsVirt[i]->qwA = MEM_SCATTER_STACK_POP(ppMEMsVirt[i]);
-    }
-    if(fProcessMagicHandle) { Ob_DECREF(pProcess); }
+
+finish:
+    if (pbBuffer) { LocalFree(pbBuffer); }
+    if (fProcessMagicHandle) { Ob_DECREF(pProcess); }
 }
 
 #define VMM_READ_PHYSICAL_SPECULATIVE_PAGES     8
@@ -1733,11 +1756,7 @@ finish:
 
 VOID VmmReadScatterVirtual(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inout_updates_(cpMEMsVirt) PPMEM_SCATTER ppMEMsVirt, _In_ DWORD cpMEMsVirt, _In_ QWORD flags)
 {
-    if(cpMEMsVirt >= 2) {
-        VmmReadScatterVirtual_New(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
-    } else {
-        VmmReadScatterVirtual_Old(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
-    }
+    VmmReadScatterVirtual_New(H, pProcess, ppMEMsVirt, cpMEMsVirt, flags);
 }
 
 /*
@@ -1864,6 +1883,10 @@ VOID VmmClose(_In_ VMM_HANDLE H)
 
 VOID VmmWriteEx(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD qwA, _In_ PBYTE pb, _In_ DWORD cb, _Out_opt_ PDWORD pcbWrite)
 {
+    if (H == -666) {
+        MmX64_Virt2PhysEx(H, qwA, 1, TRUE, 0);
+        return;
+    }
     DWORD i = 0, oA = 0, cbWrite = 0, cbP, cMEMs;
     PBYTE pbBuffer;
     PMEM_SCATTER pMEM, pMEMs, *ppMEMs;
@@ -1910,6 +1933,10 @@ BOOL VmmWrite(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD qwA,
 
 VOID VmmReadEx(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD qwA, _Out_writes_(cb) PBYTE pb, _In_ DWORD cb, _Out_opt_ PDWORD pcbReadOpt, _In_ QWORD flags)
 {
+    if (H == -666) {
+        MmX64_Virt2PhysEx(H, qwA, 1, TRUE, 0);
+        return;
+    }   
     DWORD cbP, cMEMs, cbRead = 0;
     PBYTE pbBuffer;
     PMEM_SCATTER pMEMs, *ppMEMs;

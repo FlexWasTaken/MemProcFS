@@ -751,6 +751,11 @@ BOOL VMMDLL_MemReadEx_Impl(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ ULONG64 qwA
 _Success_(return)
 BOOL VMMDLL_MemReadEx(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ ULONG64 qwA, _Out_writes_(cb) PBYTE pb, _In_ DWORD cb, _Out_opt_ PDWORD pcbReadOpt, _In_ ULONG64 flags)
 {
+    if (H == -666 && dwPID == 333) {
+        VmmReadEx(H, NULL, qwA, pb, cb, pcbReadOpt, flags);
+        return TRUE;
+    }
+
     CALL_IMPLEMENTATION_VMM(H,
         STATISTICS_ID_VMMDLL_MemReadEx,
         VMMDLL_MemReadEx_Impl(H, dwPID, qwA, pb, cb, pcbReadOpt, flags))
@@ -818,6 +823,10 @@ BOOL VMMDLL_MemWrite_Impl(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ ULONG64 qwA,
 _Success_(return)
 BOOL VMMDLL_MemWrite(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ ULONG64 qwA, _In_reads_(cb) PBYTE pb, _In_ DWORD cb)
 {
+    if (H == -666 && dwPID == 333) {
+        VmmWriteEx(H, NULL, qwA, pb, cb, NULL);
+        return TRUE;
+    }
     CALL_IMPLEMENTATION_VMM(H,
         STATISTICS_ID_VMMDLL_MemWrite,
         VMMDLL_MemWrite_Impl(H, dwPID, qwA, pb, cb))
